@@ -1,0 +1,62 @@
+groups:
+  - name: sre_incident_rules
+    rules:
+      - alert: HighHttpErrorRate
+        expr: (sum(rate(http_requests_total{status_code=~"5.."}[1m])) / sum(rate(http_requests_total[1m]))) * 100 > 5
+        for: 10s
+        labels:
+          severity: SEV1
+          category: red_errors
+        annotations:
+          summary: "High HTTP 5xx error rate detected on {{ $labels.service }}"
+          description: "5xx error rate is currently at {{ $value }}% (threshold: >5%)."
+
+      - alert: HighLatencyP99
+        expr: histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[1m])) by (le)) > 1.0
+        for: 10s
+        labels:
+          severity: SEV2
+          category: red_duration
+        annotations:
+          summary: "P99 latency spike detected on {{ $labels.service }}"
+          description: "P99 latency exceeded 1.0s (currently {{ $value | humanizeDuration }})."
+
+      - alert: CPUSaturationSpike
+        expr: rate(process_cpu_user_seconds_total[1m]) * 100 > 60
+        for: 10s
+        labels:
+          severity: SEV2
+          category: saturation_cpu
+        annotations:
+          summary: "High CPU saturation spike on {{ $labels.service }}"
+          description: "CPU usage is above 60% saturation."
+
+      - alert: PredictiveMemoryLeak
+        expr: predict_linear(memory_leak_gauge_bytes[1m], 300) > 80000000
+        for: 15s
+        labels:
+          severity: SEV2
+          category: predictive_saturation
+        annotations:
+          summary: "Predictive incident: Memory leak exhaustion forecasted"
+          description: "PromQL predict_linear forecasted heap memory exhaustion within 5 minutes based on current slope."
+
+      - alert: DbConnectionPoolExhaustion
+        expr: db_connection_pool_active >= 20
+        for: 10s
+        labels:
+          severity: SEV1
+          category: saturation_connections
+        annotations:
+          summary: "Database connection pool exhausted"
+          description: "Active DB connections saturated at {{ $value }}/20. Inbound requests are queuing."
+
+      - alert: DeployRegressionDetected
+        expr: deploy_regression_active == 1
+        for: 5s
+        labels:
+          severity: SEV1
+          category: deploy_guard
+        annotations:
+          summary: "Deploy Guard: Post-deploy regression detected"
+          description: "Service has flagged a post-deploy regression on the latest deployment commit."

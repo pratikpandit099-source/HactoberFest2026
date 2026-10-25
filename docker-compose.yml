@@ -1,0 +1,70 @@
+version: '3.8'
+
+services:
+  # 1. Node.js Application & SRE Chaos Lab
+  api:
+    build: .
+    container_name: sre-chaos-api
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - SERVICE_NAME=order-service
+      - SERVICE_VERSION=v1.4.2
+      - NODE_ENV=production
+      - PROMETHEUS_HOST=http://prometheus:9090
+      - LOKI_HOST=http://loki:3100
+      - AUTO_TRAFFIC=true
+    depends_on:
+      - prometheus
+      - loki
+    restart: unless-stopped
+
+  # 2. Prometheus (Scrapes RED metrics and evaluates alert rules every 5s)
+  prometheus:
+    image: prom/prometheus:v2.50.1
+    container_name: sre-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    restart: unless-stopped
+
+  # 3. Loki (Log aggregation & LogQL pattern analysis)
+  loki:
+    image: grafana/loki:3.0.0
+    container_name: sre-loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+    command: -config.file=/etc/loki/local-config.yaml
+    restart: unless-stopped
+
+  # 4. Grafana (Pre-provisioned Dashboards & Datasources)
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: sre-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SECURITY_ALLOW_EMBEDDING=true
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+    volumes:
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+    depends_on:
+      - prometheus
+      - loki
+    restart: unless-stopped

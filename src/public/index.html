@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SRE Incident & Chaos Testing Lab</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    @keyframes pulse-slow {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    .animate-pulse-slow {
+      animation: pulse-slow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+    @keyframes glow-rose {
+      0%, 100% { box-shadow: 0 0 15px rgba(244, 63, 94, 0.35); }
+      50% { box-shadow: 0 0 25px rgba(244, 63, 94, 0.6); }
+    }
+    .glow-active-incident {
+      animation: glow-rose 2s infinite ease-in-out;
+    }
+    .toast-enter {
+      transform: translateX(100%);
+      opacity: 0;
+      transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .toast-show {
+      transform: translateX(0);
+      opacity: 1;
+    }
+    .toast-exit {
+      transform: translateX(120%);
+      opacity: 0;
+      transition: all 0.25s ease-in;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans antialiased">
+
+  <!-- Header -->
+  <header class="border-b border-slate-800 bg-slate-900/60 backdrop-blur sticky top-0 z-40 px-6 py-4 flex flex-wrap items-center justify-between gap-4">
+    <div class="flex items-center space-x-3">
+      <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-rose-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+        <i class="fa-solid fa-fire-flame-curved text-white text-lg"></i>
+      </div>
+      <div>
+        <h1 class="text-xl font-bold tracking-tight text-white flex items-center gap-2">
+          SRE Chaos Lab & Observability
+          <span id="system-badge" class="px-2.5 py-0.5 text-xs font-semibold rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1.5">
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+            BASELINE HEALTHY
+          </span>
+        </h1>
+        <p class="text-xs text-slate-400">Target: <span class="font-mono text-indigo-400">order-service:3000</span> | Prometheus Scrapes: <span class="text-emerald-400 font-mono">5s interval</span></p>
+      </div>
+    </div>
+
+    <!-- Quick Observability Links & Actions -->
+    <div class="flex items-center gap-3">
+      <a href="http://localhost:9090/alerts" target="_blank" class="px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition flex items-center gap-1.5">
+        <i class="fa-solid fa-bell text-amber-400"></i> Prometheus Alerts
+      </a>
+      <a href="http://localhost:3001/d/sre-incident-lab" target="_blank" class="px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition flex items-center gap-1.5">
+        <i class="fa-solid fa-chart-line text-sky-400"></i> Grafana Dashboard
+      </a>
+      <a href="/metrics" target="_blank" class="px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition flex items-center gap-1.5">
+        <i class="fa-solid fa-code text-emerald-400"></i> /metrics
+      </a>
+      <button onclick="resetSystem()" class="px-4 py-1.5 rounded-lg text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white shadow-md shadow-rose-600/30 transition flex items-center gap-1.5">
+        <i class="fa-solid fa-rotate-left"></i> Reset Baseline
+      </button>
+    </div>
+  </header>
+
+  <!-- LIVE ACTIVE INCIDENT BROADCAST BANNER & PROGRESS BAR -->
+  <div id="active-incident-banner" class="hidden border-b border-rose-500/40 bg-gradient-to-r from-rose-950/90 via-slate-900 to-rose-950/90 p-4 shadow-xl shadow-rose-950/50 glow-active-incident transition-all">
+    <div class="max-w-7xl mx-auto flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+      <div class="flex items-start gap-3 flex-1">
+        <div id="banner-icon-container" class="w-10 h-10 rounded-lg bg-rose-500/20 border border-rose-500/30 text-rose-400 flex items-center justify-center shrink-0 text-lg">
+          <i id="banner-icon" class="fa-solid fa-triangle-exclamation animate-bounce"></i>
+        </div>
+        <div class="space-y-1">
+          <div class="flex items-center gap-2 flex-wrap">
+            <span id="banner-sev-badge" class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-rose-500 text-white">SEV1 INCIDENT</span>
+            <h2 id="banner-title" class="text-sm font-bold text-white tracking-wide">HTTP 5xx Error Spike Active</h2>
+            <span class="text-xs text-rose-300 font-mono px-2 py-0.5 rounded bg-rose-500/20 border border-rose-500/30" id="banner-endpoint">POST /chaos/error-spike</span>
+          </div>
+          <p id="banner-description" class="text-xs text-slate-300">Payload sent: <code class="font-mono text-amber-300" id="banner-payload">{"rate": 0.85, "durationSeconds": 60}</code> &bull; Tripping PromQL Error Rate > 5%</p>
+        </div>
+      </div>
+
+      <!-- Live Countdown Progress -->
+      <div class="flex items-center gap-4 w-full md:w-auto justify-between md:justify-end">
+        <div class="text-right">
+          <div class="text-xs font-semibold text-rose-300 flex items-center gap-1.5 justify-end">
+            <i class="fa-solid fa-clock-rotate-left fa-spin"></i>
+            <span id="banner-timer-text">Active (60s countdown)</span>
+          </div>
+          <!-- Progress bar track -->
+          <div class="w-40 h-2 bg-slate-800 rounded-full mt-1.5 overflow-hidden border border-slate-700">
+            <div id="banner-progress-bar" class="h-full bg-gradient-to-r from-amber-400 to-rose-500 rounded-full transition-all duration-1000 ease-linear" style="width: 100%;"></div>
+          </div>
+        </div>
+        <button id="banner-stop-btn" onclick="stopCurrentIncident()" class="px-3.5 py-2 rounded-lg text-xs font-bold bg-slate-800 hover:bg-slate-700 text-rose-300 hover:text-white border border-rose-500/30 transition flex items-center gap-1.5 shrink-0">
+          <i class="fa-solid fa-stop"></i> Resolve Now
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- FLOATING TOAST NOTIFICATION CONTAINER -->
+  <div id="toast-container" class="fixed top-20 right-6 z-50 flex flex-col gap-3 pointer-events-none max-w-md w-full"></div>
+
+  <!-- Main Grid -->
+  <main class="flex-1 p-6 max-w-7xl mx-auto w-full space-y-6">
+
+    <!-- Top Status Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div class="p-4 rounded-xl bg-slate-900 border border-slate-800">
+        <div class="flex items-center justify-between text-xs text-slate-400 mb-1">
+          <span>Traffic Generator</span>
+          <button id="traffic-toggle-btn" onclick="toggleTraffic()" class="text-xs text-indigo-400 hover:underline">Pause</button>
+        </div>
+        <div class="text-2xl font-bold text-white flex items-baseline gap-2">
+          <span id="stat-traffic-rps">0</span> <span class="text-xs font-normal text-slate-400">req/s</span>
+        </div>
+        <div class="text-xs text-slate-500 mt-1" id="stat-traffic-totals">Total: 0 reqs</div>
+      </div>
+
+      <div class="p-4 rounded-xl bg-slate-900 border border-slate-800">
+        <div class="flex items-center justify-between text-xs text-slate-400 mb-1">
+          <span>Active Faults</span>
+          <i class="fa-solid fa-triangle-exclamation text-amber-400"></i>
+        </div>
+        <div class="text-2xl font-bold text-white" id="stat-faults-count">0</div>
+        <div class="text-xs text-slate-500 mt-1" id="stat-faults-summary">None (healthy)</div>
+      </div>
+
+      <div class="p-4 rounded-xl bg-slate-900 border border-slate-800">
+        <div class="flex items-center justify-between text-xs text-slate-400 mb-1">
+          <span>DB Connection Pool</span>
+          <i class="fa-solid fa-database text-cyan-400"></i>
+        </div>
+        <div class="text-2xl font-bold text-white" id="stat-db-pool">3 / 20</div>
+        <div class="text-xs text-emerald-400 mt-1" id="stat-db-status">Normal headroom</div>
+      </div>
+
+      <div class="p-4 rounded-xl bg-slate-900 border border-slate-800">
+        <div class="flex items-center justify-between text-xs text-slate-400 mb-1">
+          <span>Service Version (Deploy Guard)</span>
+          <i class="fa-solid fa-code-branch text-purple-400"></i>
+        </div>
+        <div class="text-xl font-bold text-white font-mono" id="stat-version">v1.4.2</div>
+        <div class="text-xs text-slate-500 mt-1" id="stat-commit">Commit: a1b2c3d (stable)</div>
+      </div>
+    </div>
+
+    <!-- Automated Scenario Banner -->
+    <div class="p-4 rounded-xl bg-gradient-to-r from-indigo-950/80 via-slate-900 to-slate-900 border border-indigo-800/40 flex flex-wrap items-center justify-between gap-4">
+      <div class="space-y-1">
+        <h2 class="text-sm font-semibold text-indigo-300 flex items-center gap-2">
+          <i class="fa-solid fa-wand-magic-sparkles"></i> Automated 90-Second Chaos Test Cycle
+        </h2>
+        <p class="text-xs text-slate-400">
+          Executes baseline &rarr; 5xx error spike (20s) &rarr; p99 latency spike (20s) &rarr; predictive memory leak &rarr; baseline recovery.
+        </p>
+      </div>
+      <button onclick="runAutoScenario()" class="px-4 py-2 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/30 transition flex items-center gap-2">
+        <i class="fa-solid fa-play"></i> Run Auto Scenario
+      </button>
+    </div>
+
+    <!-- Fault Injection Grid (The Chaos Lab) -->
+    <div class="space-y-3">
+      <div class="flex items-center justify-between">
+        <h2 class="text-base font-semibold text-white flex items-center gap-2">
+          <i class="fa-solid fa-bolt-lightning text-amber-400"></i> Fault Injection Console
+        </h2>
+        <span class="text-xs text-slate-400">Click any card to inject or toggle simulated production incidents</span>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+
+        <!-- Fault 1: HTTP 500 Error Spike -->
+        <div id="card-error-spike" class="p-5 rounded-xl bg-slate-900 border border-slate-800 hover:border-rose-500/50 transition relative overflow-hidden group">
+          <div class="flex items-start justify-between">
+            <div class="w-9 h-9 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 flex items-center justify-center mb-3">
+              <i class="fa-solid fa-triangle-exclamation"></i>
+            </div>
+            <span class="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-rose-500/20 text-rose-300">SEV1 RED Errors</span>
+          </div>
+          <h3 class="font-semibold text-white text-sm">HTTP 5xx Error Spike</h3>
+          <p class="text-xs text-slate-400 mt-1">Causes 85% of traffic to fail with 500 Internal Server Errors, tripping error-rate SLO thresholds.</p>
+          <div class="mt-3 p-2 bg-slate-950/60 rounded border border-slate-800/80 font-mono text-[11px] text-slate-400">
+            sum(rate(http_requests_total{status_code=~"5.."}[1m])) > 5%
+          </div>
+          <div class="mt-4 flex gap-2">
+            <button id="btn-inject-errors" onclick="injectErrorSpike()" class="flex-1 py-1.5 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-500 text-white transition flex items-center justify-center gap-1.5">
+              <span>Inject Spike (60s)</span>
+            </button>
+            <button onclick="stopErrorSpike()" class="px-3 py-1.5 rounded-lg text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 transition">
+              Stop
+            </button>
+          </div>
+        </div>
+
+        <!-- Fault 2: P99 Latency Spike -->
+        <div id="card-latency-spike" class="p-5 rounded-xl bg-slate-900 border border-slate-800 hover:border-amber-500/50 transition relative overflow-hidden group">
+          <div class="flex items-start justify-between">
+            <div class="w-9 h-9 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center mb-3">
+              <i class="fa-solid fa-stopwatch"></i>
+            </div>
+            <span class="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-amber-500/20 text-amber-300">SEV2 RED Duration</span>
+          </div>
+          <h3 class="font-semibold text-white text-sm">P99 Latency Spike</h3>
+          <p class="text-xs text-slate-400 mt-1">Injects 2.5s-3.5s artificial latency delays to simulate upstream lock contention and slow database queries.</p>
+          <div class="mt-3 p-2 bg-slate-950/60 rounded border border-slate-800/80 font-mono text-[11px] text-slate-400">
+            histogram_quantile(0.99, ...) > 1.0s
+          </div>
+          <div class="mt-4 flex gap-2">
+            <button id="btn-inject-latency" onclick="injectLatencySpike()" class="flex-1 py-1.5 rounded-lg text-xs font-semibold bg-amber-600 hover:bg-amber-500 text-white transition flex items-center justify-center gap-1.5">
+              <span>Inject Latency (60s)</span>
+            </button>
+            <button onclick="stopLatencySpike()" class="px-3 py-1.5 rounded-lg text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 transition">
+              Stop
+            </button>
+          </div>
+        </div>
+
+        <!-- Fault 3: Predictive Memory Leak -->
+        <div id="card-memory-leak" class="p-5 rounded-xl bg-slate-900 border border-slate-800 hover:border-purple-500/50 transition relative overflow-hidden group">
+          <div class="flex items-start justify-between">
+            <div class="w-9 h-9 rounded-lg bg-purple-500/10 border border-purple-500/20 text-purple-400 flex items-center justify-center mb-3">
+              <i class="fa-solid fa-chart-line"></i>
+            </div>
+            <span class="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-purple-500/20 text-purple-300">Predictive Incidents</span>
+          </div>
+          <h3 class="font-semibold text-white text-sm">Linear Memory Leak</h3>
+          <p class="text-xs text-slate-400 mt-1">Allocates uncollected heap buffers continuously to trigger PromQL <code class="text-purple-300 font-mono">predict_linear</code> forecast alerts.</p>
+          <div class="mt-3 p-2 bg-slate-950/60 rounded border border-slate-800/80 font-mono text-[11px] text-slate-400">
+            predict_linear(memory_leak_gauge_bytes[1m], 300) > 80MB
+          </div>
+          <div class="mt-4 flex gap-2">
+            <button id="btn-inject-memory" onclick="injectMemoryLeak()" class="flex-1 py-1.5 rounded-lg text-xs font-semibold bg-purple-600 hover:bg-purple-500 text-white transition flex items-center justify-center gap-1.5">
+              <span>Start Leak</span>
+            </button>
+            <button onclick="stopMemoryLeak()" class="px-3 py-1.5 rounded-lg text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 transition">
+              Free Memory
+            </button>
+          </div>
+        </div>
+
+        <!-- Fault 4: CPU Saturation Burn -->
+        <div id="card-cpu-spike" class="p-5 rounded-xl bg-slate-900 border border-slate-800 hover:border-orange-500/50 transition relative overflow-hidden group">
+          <div class="flex items-start justify-between">
+            <div class="w-9 h-9 rounded-lg bg-orange-500/10 border border-orange-500/20 text-orange-400 flex items-center justify-center mb-3">
+              <i class="fa-solid fa-microchip"></i>
+            </div>
+            <span class="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-orange-500/20 text-orange-300">Saturation CPU</span>
+          </div>
+          <h3 class="font-semibold text-white text-sm">CPU Saturation Burn</h3>
+          <p class="text-xs text-slate-400 mt-1">Runs computational stress loops to push user CPU utilization above 60-80% saturation threshold.</p>
+          <div class="mt-3 p-2 bg-slate-950/60 rounded border border-slate-800/80 font-mono text-[11px] text-slate-400">
+            rate(process_cpu_user_seconds_total[1m]) * 100 > 60
+          </div>
+          <div class="mt-4 flex gap-2">
+            <button id="btn-inject-cpu" onclick="injectCpuSpike()" class="flex-1 py-1.5 rounded-lg text-xs font-semibold bg-orange-600 hover:bg-orange-500 text-white transition flex items-center justify-center gap-1.5">
+              <span>Burn CPU (30s)</span>
+            </button>
+            <button onclick="stopCpuSpike()" class="px-3 py-1.5 rounded-lg text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 transition">
+              Stop
+            </button>
+          </div>
+        </div>
+
+        <!-- Fault 5: DB Connection Exhaustion -->
+        <div id="card-db-exhaustion" class="p-5 rounded-xl bg-slate-900 border border-slate-800 hover:border-cyan-500/50 transition relative overflow-hidden group">
+          <div class="flex items-start justify-between">
+            <div class="w-9 h-9 rounded-lg bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 flex items-center justify-center mb-3">
+              <i class="fa-solid fa-database"></i>
+            </div>
+            <span class="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300">SEV1 Saturation</span>
+          </div>
+          <h3 class="font-semibold text-white text-sm">DB Connection Pool Exhaustion</h3>
+          <p class="text-xs text-slate-400 mt-1">Saturates connection pool to 20/20 capacity. Subsequent queries queue and throw 503 timeouts.</p>
+          <div class="mt-3 p-2 bg-slate-950/60 rounded border border-slate-800/80 font-mono text-[11px] text-slate-400">
+            db_connection_pool_active >= 20
+          </div>
+          <div class="mt-4 flex gap-2">
+            <button id="btn-inject-db" onclick="injectDbExhaustion()" class="flex-1 py-1.5 rounded-lg text-xs font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition flex items-center justify-center gap-1.5">
+              <span>Saturate Pool</span>
+            </button>
+            <button onclick="stopDbExhaustion()" class="px-3 py-1.5 rounded-lg text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 transition">
+              Release Pool
+            </button>
+          </div>
+        </div>
+
+        <!-- Fault 6: Novel Loki Error Signatures -->
+        <div id="card-novel-error" class="p-5 rounded-xl bg-slate-900 border border-slate-800 hover:border-emerald-500/50 transition relative overflow-hidden group">
+          <div class="flex items-start justify-between">
+            <div class="w-9 h-9 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center mb-3">
+              <i class="fa-solid fa-fingerprint"></i>
+            </div>
+            <span class="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300">Loki Log Anomaly</span>
+          </div>
+          <h3 class="font-semibold text-white text-sm">Novel Error Signature (Loki)</h3>
+          <p class="text-xs text-slate-400 mt-1">Emits brand-new unhandled error signatures to test Loki's <code class="text-emerald-300 font-mono">pattern</code> parser & Drain clustering.</p>
+          <div class="mt-3 p-2 bg-slate-950/60 rounded border border-slate-800/80 font-mono text-[11px] text-slate-400">
+            {service="order-service"} |= "NOVEL_SIGNATURE"
+          </div>
+          <div class="mt-4 flex gap-2">
+            <button id="btn-inject-loki-deadlock" onclick="injectNovelError('payment_deadlock')" class="flex-1 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition flex items-center justify-center gap-1.5">
+              <span>Emit Signature</span>
+            </button>
+            <button id="btn-inject-loki-auth" onclick="injectNovelError('token_corruption')" class="px-3 py-1.5 rounded-lg text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 transition" title="Emit Token Error">
+              Auth Err
+            </button>
+          </div>
+        </div>
+
+        <!-- Fault 7: Deploy Guard Regression -->
+        <div id="card-deploy-guard" class="p-5 rounded-xl bg-slate-900 border border-slate-800 hover:border-pink-500/50 transition relative overflow-hidden group md:col-span-2 lg:col-span-3">
+          <div class="flex items-start justify-between">
+            <div class="flex items-center gap-3">
+              <div class="w-9 h-9 rounded-lg bg-pink-500/10 border border-pink-500/20 text-pink-400 flex items-center justify-center">
+                <i class="fa-solid fa-shield-halved"></i>
+              </div>
+              <div>
+                <h3 class="font-semibold text-white text-sm">Deploy Guard: Post-Deployment Regression</h3>
+                <p class="text-xs text-slate-400">Simulates a deployment of <code class="text-pink-300 font-mono">v1.4.3-regressed (commit: e94f12d)</code> that breaks checkout database schema.</p>
+              </div>
+            </div>
+            <span class="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-pink-500/20 text-pink-300">Deploy Guard</span>
+          </div>
+          <div class="mt-4 flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-800">
+            <div class="font-mono text-xs text-slate-400">
+              deploy_regression_active == 1 (commit: e94f12d)
+            </div>
+            <div class="flex gap-2">
+              <button id="btn-inject-deploy" onclick="injectDeployRegression()" class="px-4 py-1.5 rounded-lg text-xs font-semibold bg-pink-600 hover:bg-pink-500 text-white transition flex items-center gap-1.5">
+                <span>Simulate Bad Deploy</span>
+              </button>
+              <button onclick="rollbackDeployRegression()" class="px-4 py-1.5 rounded-lg text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 transition">
+                Rollback Deploy
+              </button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Live Event Log -->
+    <div class="p-5 rounded-xl bg-slate-900 border border-slate-800 space-y-3">
+      <div class="flex items-center justify-between">
+        <h3 class="text-sm font-semibold text-white flex items-center gap-2">
+          <i class="fa-solid fa-list-check text-indigo-400"></i> Chaos Activity & Incident Audit Log
+        </h3>
+        <span class="text-xs text-slate-500" id="last-updated-text">Updating live...</span>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs text-slate-300">
+          <thead class="text-[11px] text-slate-500 uppercase bg-slate-950/50 border-b border-slate-800">
+            <tr>
+              <th class="py-2.5 px-3">Timestamp</th>
+              <th class="py-2.5 px-3">Event Type</th>
+              <th class="py-2.5 px-3">Description</th>
+            </tr>
+          </thead>
+          <tbody id="events-tbody" class="divide-y divide-slate-800/60 font-mono">
+            <tr>
+              <td colspan="3" class="py-4 text-center text-slate-500">Waiting for incident activity...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </main>
+
+  <footer class="border-t border-slate-800/60 py-4 px-6 text-center text-xs text-slate-500">
+    HacktoberFest SRE Observability Demo &bull; Prometheus RED Metrics &bull; Loki LogQL &bull; Node.js Chaos Lab
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>
